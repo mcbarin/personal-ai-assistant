@@ -78,7 +78,12 @@ async def answer_with_context(question: str) -> Tuple[str, List[str]]:
     messages = [
         {
             "role": "system",
-            "content": "You are a helpful personal assistant. Use the provided context when it is relevant.",
+            "content": (
+                "You are a concise personal assistant.\n"
+                "Use the provided context only as factual background.\n"
+                "Always answer the user's question directly and do not ask follow-up "
+                "questions about their goals or intentions unless absolutely necessary."
+            ),
         },
         {
             "role": "user",

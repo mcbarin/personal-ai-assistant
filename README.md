@@ -1,12 +1,11 @@
-## Voice-Driven Personal Assistant (FastAPI + RAG + Google Calendar)
+## Personal Assistant (FastAPI + RAG + Google Calendar)
 
-This project is a **personal AI assistant** you can talk or type to. It:
+This project is a **personal AI assistant** you can chat with. It:
 
 - Uses a local or hosted **LLM** (Ollama by default) to understand your requests.
 - Uses **RAG** over your own notes to answer questions grounded in your data.
 - Can **create and list todos** in a local database.
 - Can **create real events** in your **Google Calendar**.
-- Optionally supports **voice input** using local Whisper for transcription.
 
 The stack is designed to showcase modern AI integration for backend-heavy roles:
 
@@ -20,7 +19,6 @@ The stack is designed to showcase modern AI integration for backend-heavy roles:
 
 - `FastAPI` app exposes:
   - `POST /chat` – text chat with the assistant.
-  - `POST /voice` – upload audio; transcribe and send to same assistant pipeline.
 - **LLM provider abstraction**:
   - Default: local **Ollama** (e.g., Llama 3) via HTTP.
   - Drop-in replacements for OpenAI/Anthropic later.

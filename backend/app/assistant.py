@@ -81,7 +81,12 @@ def _handle_event_command(message: str) -> Tuple[str, List[str], List[str]]:
 
     event = calendar_tools.create_event(title=title, start=start, end=end, description=None)
     link = event.get("htmlLink", "(no link)")
-    reply = f"Created calendar event '{title}' from {start.isoformat()} to {end.isoformat()}.\nLink: {link}"
+
+    human = _format_human_datetime_range(start, end)
+    reply = (
+        f"Created calendar event '{title}' for {human}.\n"
+        f"Go to calendar event: {link}"
+    )
     return reply, ["create_event"], []
 
 
@@ -195,11 +200,41 @@ async def _handle_event_nl(message: str) -> Tuple[str, List[str], List[str]]:
     title, start, end = details
     event = calendar_tools.create_event(title=title, start=start, end=end, description=None)
     link = event.get("htmlLink", "(no link)")
+
+    human = _format_human_datetime_range(start, end)
     reply = (
-        f"Created calendar event '{title}' from {start.isoformat()} to {end.isoformat()}.\n"
-        f"Link: {link}"
+        f"Created calendar event '{title}' for {human}.\n"
+        f"Go to calendar event: {link}"
     )
     return reply, ["create_event"], []
+
+
+def _format_human_datetime_range(start: datetime, end: datetime) -> str:
+    """Return a human-friendly description like 'tomorrow, 11pm–12am'."""
+    now = datetime.now()
+    start_date = start.date()
+    today = now.date()
+    tomorrow = today + timedelta(days=1)
+
+    if start_date == today:
+        date_label = "today"
+    elif start_date == tomorrow:
+        date_label = "tomorrow"
+    else:
+        date_label = start.strftime("%b %-d")  # e.g. 'Nov 15'
+
+    def fmt_time(dt: datetime) -> str:
+        # e.g. '11:00pm' or '3pm'
+        hour = dt.strftime("%-I").lstrip("0")
+        minute = dt.strftime("%M")
+        ampm = dt.strftime("%p").lower()
+        if minute == "00":
+            return f"{hour}{ampm}"
+        return f"{hour}:{minute}{ampm}"
+
+    start_str = fmt_time(start)
+    end_str = fmt_time(end)
+    return f"{date_label}, {start_str}–{end_str}"
 
 
 async def handle_message(message: str) -> ChatResponse:

@@ -1,7 +1,9 @@
 from typing import List, Optional
+from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from .config import Settings, get_settings
 from .assistant import handle_message
@@ -48,3 +50,7 @@ def get_todos(
     return list_todos(db, status=status)
 
 
+# Serve the simple frontend under /ui to avoid conflicting with API endpoints
+static_dir = Path(__file__).parent / "static"
+if static_dir.exists():
+    app.mount("/ui", StaticFiles(directory=str(static_dir), html=True), name="static")

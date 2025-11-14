@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Personal Assistant</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #0f172a;
+      color: #e5e7eb;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+    }
+    .container {
+      width: 100%;
+      max-width: 800px;
+      background: #020617;
+      border-radius: 16px;
+      box-shadow: 0 25px 50px -12px rgba(15, 23, 42, 0.9);
+      border: 1px solid #1e293b;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .header {
+      padding: 16px 20px;
+      border-bottom: 1px solid #1e293b;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .header-title {
+      font-size: 18px;
+      font-weight: 600;
+      color: #f9fafb;
+    }
+    .header-subtitle {
+      font-size: 12px;
+      color: #9ca3af;
+    }
+    .badge {
+      font-size: 11px;
+      padding: 4px 8px;
+      border-radius: 999px;
+      background: #0f766e;
+      color: #ecfeff;
+    }
+    .messages {
+      flex: 1;
+      padding: 16px 20px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .message {
+      max-width: 80%;
+      padding: 10px 12px;
+      border-radius: 12px;
+      font-size: 14px;
+      line-height: 1.4;
+      white-space: pre-wrap;
+    }
+    .message.user {
+      align-self: flex-end;
+      background: #0f766e;
+      color: #ecfeff;
+      border-bottom-right-radius: 2px;
+    }
+    .message.assistant {
+      align-self: flex-start;
+      background: #020617;
+      border: 1px solid #1e293b;
+      border-bottom-left-radius: 2px;
+    }
+    .footer {
+      border-top: 1px solid #1e293b;
+      padding: 10px 12px;
+      display: flex;
+      gap: 8px;
+    }
+    .input {
+      flex: 1;
+      border-radius: 999px;
+      border: 1px solid #1f2937;
+      padding: 8px 14px;
+      font-size: 14px;
+      outline: none;
+      background: #020617;
+      color: #e5e7eb;
+    }
+    .input::placeholder {
+      color: #6b7280;
+    }
+    .button {
+      border-radius: 999px;
+      border: none;
+      padding: 8px 14px;
+      font-size: 14px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: #4f46e5;
+      color: #e5e7eb;
+    }
+    .button.secondary {
+      background: #1f2933;
+      color: #e5e7eb;
+    }
+    .button:disabled {
+      opacity: 0.6;
+      cursor: default;
+    }
+    .status {
+      font-size: 11px;
+      color: #9ca3af;
+      margin-left: 16px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div>
+        <div class="header-title">Personal Assistant</div>
+        <div class="header-subtitle">Ask questions, create todos, and schedule events.</div>
+      </div>
+      <div class="badge">Local LLM + RAG + Calendar</div>
+    </div>
+    <div id="messages" class="messages">
+      <div class="message assistant">
+        Hi! You can chat with me here. I can answer questions from your notes, create todos,
+        and schedule events in your Google Calendar.<br/><br/>
+        Try something like:<br/>
+        - "Remind me to buy groceries this weekend"<br/>
+        - "Schedule coffee with John tomorrow at 6pm"
+      </div>
+    </div>
+    <form id="chat-form" class="footer">
+      <input id="message-input" class="input" placeholder="Type a message..." autocomplete="off" />
+      <button id="send-button" class="button" type="submit">
+        Send
+      </button>
+    </form>
+    <div class="status" id="status"></div>
+  </div>
+
+  <script>
+    const API_TOKEN = "dev-token-123"; // For local dev only
+
+    const messagesEl = document.getElementById("messages");
+    const formEl = document.getElementById("chat-form");
+    const inputEl = document.getElementById("message-input");
+    const sendButton = document.getElementById("send-button");
+    const statusEl = document.getElementById("status");
+
+    function addMessage(text, role) {
+      const div = document.createElement("div");
+      div.className = "message " + role;
+
+      // Render URLs as clickable links.
+      // Special-case calendar links so only the label is visible.
+      const parts = text.split(/(https?:\/\/\S+)/g);
+      parts.forEach((part, index) => {
+        if (!part) return;
+        if (/^https?:\/\//.test(part)) {
+          const a = document.createElement("a");
+          a.href = part;
+
+          // Look at the previous text part to choose link label
+          const prev = parts[index - 1] || "";
+          const prevTrimmed = prev.trimEnd();
+          if (
+            prevTrimmed.endsWith("Go to calendar event:") ||
+            prevTrimmed.endsWith("Go to calendar event")
+          ) {
+            a.textContent = "Go to calendar event";
+          } else {
+            a.textContent = part;
+          }
+
+          a.target = "_blank";
+          a.rel = "noopener noreferrer";
+          div.appendChild(a);
+        } else {
+          const next = parts[index + 1] || "";
+          const label = "Go to calendar event:";
+
+          // If this text part ends with the label and the next part is a URL,
+          // omit the label text (the link will render it instead) but keep any
+          // text before it.
+          if (
+            part.trimEnd().endsWith(label) &&
+            /^https?:\/\//.test(next)
+          ) {
+            const cutoff = part.lastIndexOf(label);
+            const beforeLabel = part.slice(0, cutoff);
+            if (beforeLabel) {
+              div.appendChild(document.createTextNode(beforeLabel));
+            }
+          } else {
+            div.appendChild(document.createTextNode(part));
+          }
+        }
+      });
+
+      messagesEl.appendChild(div);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+
+    async function sendTextMessage(message) {
+      addMessage(message, "user");
+      statusEl.textContent = "Thinking...";
+      sendButton.disabled = true;
+
+      try {
+        const res = await fetch("/chat", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ message, api_token: API_TOKEN }),
+        });
+        const data = await res.json();
+        addMessage(data.reply || "[no reply]", "assistant");
+      } catch (err) {
+        console.error(err);
+        addMessage("Error calling /chat: " + err, "assistant");
+      } finally {
+        statusEl.textContent = "";
+        sendButton.disabled = false;
+      }
+    }
+
+    formEl.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const msg = inputEl.value.trim();
+      if (!msg) return;
+      inputEl.value = "";
+      sendTextMessage(msg);
+    });
+
+  </script>
+</body>
+</html>
+
+

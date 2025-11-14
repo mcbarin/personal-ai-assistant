@@ -1,0 +1,31 @@
+# Python / virtualenv
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+
+# Env & secrets
+.env
+backend/google_credentials.json
+backend/google_token.json
+
+# Local data volumes
+data/
+
+# Notes (personal content)
+backend/notes/
+
+# IDE / OS files
+.DS_Store
+.vscode/
+.idea/
+
+# Node / frontend (if added later)
+node_modules/
+dist/
+build/
+
+# Docker
+*.log
+

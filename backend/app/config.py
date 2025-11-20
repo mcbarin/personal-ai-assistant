@@ -24,6 +24,16 @@ class Settings(BaseSettings):
     google_token_file: str = "google_token.json"
     google_calendar_id: str = "primary"
 
+    # Notion MCP
+    # Read from NOTION_INTEGRATION_TOKEN in .env, but pass as INTERNAL_INTEGRATION_TOKEN to Docker
+    notion_integration_token: Optional[str] = None
+    notion_database_id: Optional[str] = None
+
+    @property
+    def internal_integration_token(self) -> Optional[str]:
+        """Return the token for use with Docker MCP server (which expects INTERNAL_INTEGRATION_TOKEN)."""
+        return self.notion_integration_token
+
     class Config:
         env_file = ".env"
 

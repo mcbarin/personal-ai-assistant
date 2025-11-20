@@ -9,6 +9,7 @@ from langchain_community.chat_models import ChatOllama
 from .config import get_settings
 from .langchain_rag import answer_with_context_langchain
 from .langchain_tools import create_event_tool, create_todo_tool
+from .notion_mcp_client import get_notion_mcp_tools
 
 
 settings = get_settings()
@@ -132,12 +133,157 @@ async def run_agent(message: str) -> Tuple[str, List[str], List[str]]:
 
     intent = await classify_intent(message)
 
+    # Log the detected intent
+    import sys
+    print(f"DEBUG: Detected intent: {intent} for message: '{message[:50]}...'", file=sys.stderr, flush=True)
+
     if intent == "TODO":
-        text, due_iso = await extract_todo(message)
-        # Call the todo helper (which uses our existing DB-backed implementation).
-        result = create_todo_tool(text=text, due_iso=due_iso)
-        used_tools.append("create_todo")
-        reply = result if isinstance(result, str) else str(result)
+        # Try to use Notion MCP tools first, fall back to DB if not available
+        from .config import get_settings
+        settings = get_settings()
+
+        # Explicit logging to see what's happening
+        import sys
+        print(f"DEBUG: TODO intent detected", file=sys.stderr, flush=True)
+        print(f"DEBUG: notion_integration_token is set: {bool(settings.notion_integration_token)}", file=sys.stderr, flush=True)
+        if settings.notion_integration_token:
+            print(f"DEBUG: Token value starts with: {settings.notion_integration_token[:10] if settings.notion_integration_token else 'None'}...", file=sys.stderr, flush=True)
+            # Notion is configured, try to use it
+            notion_tools = await get_notion_mcp_tools()
+
+            if notion_tools:
+                # Log available tools for debugging
+                import sys
+                tool_names = [tool.name for tool in notion_tools]
+                print(f"DEBUG: Found {len(notion_tools)} Notion MCP tools: {tool_names}", file=sys.stderr, flush=True)
+
+                # Find the create page tool - we want to create a PAGE in a database
+                # The correct tool is "API-post-page" (HTTP POST = create)
+                create_tool = None
+
+                # Priority 1: Look for "post-page" or "post_page" (HTTP POST = create)
+                for tool in notion_tools:
+                    tool_name_lower = tool.name.lower()
+                    if ("post" in tool_name_lower and "page" in tool_name_lower):
+                        create_tool = tool
+                        print(f"DEBUG: Using Notion MCP tool (post-page): {tool.name}", file=sys.stderr, flush=True)
+                        break
+
+                # Priority 2: Look for tools with "create" AND "page" but NOT "comment" or "database" (as verb)
+                if not create_tool:
+                    for tool in notion_tools:
+                        tool_name_lower = tool.name.lower()
+                        # Must have "create" and "page"
+                        # Must NOT have "comment", "database" (as in creating a database), "update", "delete"
+                        if ("create" in tool_name_lower and
+                            "page" in tool_name_lower and
+                            "comment" not in tool_name_lower and
+                            "update" not in tool_name_lower and
+                            "delete" not in tool_name_lower):
+                            # Check if it's about creating a database (bad) vs creating a page (good)
+                            if "create" in tool_name_lower and "database" in tool_name_lower and "page" not in tool_name_lower:
+                                continue  # Skip tools that create databases
+                            create_tool = tool
+                            print(f"DEBUG: Using Notion MCP tool (create page): {tool.name}", file=sys.stderr, flush=True)
+                            break
+
+                # Priority 3: Exact match for known tool names
+                if not create_tool:
+                    exact_matches = ["api-post-page", "post-page", "create-page", "create_page"]
+                    for tool in notion_tools:
+                        if tool.name.lower() in exact_matches:
+                            create_tool = tool
+                            print(f"DEBUG: Using Notion MCP tool (exact match): {tool.name}", file=sys.stderr, flush=True)
+                            break
+
+                # If still no tool found, log all create/post-related tools for debugging
+                if not create_tool:
+                    create_related = [t.name for t in notion_tools if "create" in t.name.lower() or "post" in t.name.lower()]
+                    print(f"DEBUG: No suitable create-page tool found. Create/post-related tools: {create_related}", file=sys.stderr, flush=True)
+
+                if create_tool:
+                    text, due_iso = await extract_todo(message)
+                    try:
+                        # Notion API format for creating a page in a database:
+                        # parent: { database_id: "..." }
+                        # properties: { "Name": { title: [{ text: { content: "..." } }] } }
+                        # Note: Property name might be "Name", "Title", or whatever the database title property is
+
+                        if not settings.notion_database_id:
+                            raise ValueError("NOTION_DATABASE_ID must be set in .env to create pages")
+
+                        # Use correct Notion API format
+                        # Set status to "To Do" by default
+                        # Note: Property names may vary - common names: "Status", "Task Status", "Todo Status"
+                        # If this doesn't work, check your database schema and update the property name
+                        tool_args = {
+                            "parent": {
+                                "database_id": settings.notion_database_id
+                            },
+                            "properties": {
+                                "Name": {  # Most common property name for title
+                                    "title": [{"text": {"content": text}}]
+                                },
+                                "Status": {  # Set status to "To Do" - adjust property name if needed
+                                    "select": {
+                                        "name": "To Do"
+                                    }
+                                }
+                            }
+                        }
+
+                        # Try alternative property names if "Status" doesn't work
+                        # Uncomment and adjust if needed:
+                        # tool_args["properties"]["Task Status"] = {"select": {"name": "To Do"}}
+                        # tool_args["properties"]["Todo Status"] = {"select": {"name": "To Do"}}
+
+                        # If due date is provided, add it to properties
+                        # Note: This assumes your database has a "Due Date" property
+                        if due_iso:
+                            # Parse ISO datetime to date if needed
+                            due_date = due_iso.split("T")[0] if "T" in due_iso else due_iso
+                            tool_args["properties"]["Due Date"] = {
+                                "date": {"start": due_date}
+                            }
+
+                        import sys
+                        print(f"DEBUG: Calling Notion MCP tool '{create_tool.name}' with parent.database_id: {settings.notion_database_id[:10]}...", file=sys.stderr, flush=True)
+                        result = await create_tool.ainvoke(tool_args)
+                        used_tools.append("create_notion_todo")
+                        reply = f"Created Notion todo: {result}"
+                    except Exception as e:
+                        # Log the error for debugging
+                        import sys
+                        import traceback
+                        print(f"DEBUG: Notion MCP tool call failed: {e}", file=sys.stderr, flush=True)
+                        print(f"DEBUG: Traceback: {traceback.format_exc()}", file=sys.stderr, flush=True)
+                        # Fallback to DB if MCP call fails
+                        text, due_iso = await extract_todo(message)
+                        result = create_todo_tool(text=text, due_iso=due_iso)
+                        used_tools.append("create_todo")
+                        reply = f"Notion MCP failed ({e}), created in local DB: {result}"
+                else:
+                    # Notion MCP available but no create tool found
+                    import sys
+                    print(f"DEBUG: Notion MCP tools available but no create tool found. Available: {tool_names}", file=sys.stderr, flush=True)
+                    text, due_iso = await extract_todo(message)
+                    result = create_todo_tool(text=text, due_iso=due_iso)
+                    used_tools.append("create_todo")
+                    reply = f"Notion MCP configured but no create tool found. Created in local DB: {result}"
+            else:
+                # Notion token set but tools couldn't be retrieved
+                import sys
+                print("DEBUG: INTERNAL_INTEGRATION_TOKEN set but get_notion_mcp_tools() returned empty list", file=sys.stderr, flush=True)
+                text, due_iso = await extract_todo(message)
+                result = create_todo_tool(text=text, due_iso=due_iso)
+                used_tools.append("create_todo")
+                reply = f"Notion MCP configured but connection failed. Created in local DB: {result}"
+        else:
+            # No Notion MCP configured, use DB
+            text, due_iso = await extract_todo(message)
+            result = create_todo_tool(text=text, due_iso=due_iso)
+            used_tools.append("create_todo")
+            reply = result if isinstance(result, str) else str(result)
     elif intent == "EVENT":
         title, start_iso, end_iso = await extract_event(message)
         result = create_event_tool(

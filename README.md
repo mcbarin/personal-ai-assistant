@@ -178,10 +178,43 @@ You can follow this checklist as you build and run the project.
 
    - You should see a link and a matching event in your Google Calendar.
 
-7. **Next steps (to be implemented)**
-   - Wire tool-calling logic into the assistant (create/list todos, create calendar events).
-   - Add `/voice` endpoint using Whisper for STT.
-   - Add a simple web UI for chat and viewing todos/events.
+7. **Set up Notion MCP (optional, for `/chat-langchain` endpoint)**
+   - Create a Notion integration:
+     - Go to [Notion Integrations](https://www.notion.so/my-integrations) and create a new internal integration.
+     - Copy the integration token (starts with `ntn_`).
+     - Create a Todo database in Notion (or use an existing one).
+     - Share the database with your integration (click "Share" → "Invite" → select your integration).
+     - Copy the database ID from the database URL (the long string after the last `/`).
+   - Add to your `.env`:
+     ```bash
+     NOTION_INTEGRATION_TOKEN=your_token_here
+     NOTION_DATABASE_ID=your_database_id_here
+     ```
+     Note: The code reads `NOTION_INTEGRATION_TOKEN` from `.env` and passes it via `OPENAPI_MCP_HEADERS` environment variable to the Docker MCP server (which is what `mcp/notion` expects for OpenAPI MCP).
+
+   - **Verify your token is valid** by testing it directly:
+     ```bash
+     curl -X GET 'https://api.notion.com/v1/users/me' \
+       -H 'Authorization: Bearer YOUR_TOKEN_HERE' \
+       -H 'Notion-Version: 2022-06-28'
+     ```
+     Replace `YOUR_TOKEN_HERE` with your actual token. If you get a 401, the token is invalid.
+
+   - **Important**: Make sure your Notion database is shared with your integration:
+     - Open your database in Notion
+     - Click "Share" → "Invite" → Select your integration
+     - Without this, you'll get 401 errors even with a valid token
+   - The `/chat-langchain` endpoint will automatically use Notion MCP tools when configured.
+   - The Notion MCP server runs via Docker (`mcp/notion` image) using `langchain-mcp-adapters`.
+
+8. **Test the LangChain endpoint with Notion**
+   - After setting up Notion, test:
+     ```bash
+     curl -X POST http://localhost:8000/chat-langchain \
+       -H "Content-Type: application/json" \
+       -d '{"message": "Remind me to learn about MCP tomorrow", "api_token": "dev-token-123"}'
+     ```
+   - This should create a todo in your Notion database (if `NOTION_TOKEN` is set) or fall back to local DB.
 
 More detailed backend and frontend implementation will live under `backend/` (and optionally `frontend/`) as you build out the project.
 

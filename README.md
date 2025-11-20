@@ -1,37 +1,43 @@
-## Personal Assistant (FastAPI + RAG + Google Calendar)
+## Personal Assistant (FastAPI + LangChain + RAG + MCP)
 
 This project is a **personal AI assistant** you can chat with. It:
 
 - Uses a local or hosted **LLM** (Ollama by default) to understand your requests.
 - Uses **RAG** over your own notes to answer questions grounded in your data.
-- Can **create and list todos** in a local database.
+- Can **create todos** in **Notion** via **MCP** (Model Context Protocol).
 - Can **create real events** in your **Google Calendar**.
+- Uses **LangChain** for agent orchestration, RAG, and tool calling.
 
 The stack is designed to showcase modern AI integration for backend-heavy roles:
 
 - **Backend**: FastAPI
-- **AI orchestration**: LangChain-style components (LLM provider abstraction, tools, RAG pipeline)
-- **Vector DB**: Qdrant or Chroma
-- **DB**: Postgres (via Docker) for todos and logs
+- **AI orchestration**: LangChain (agents, tools, RAG pipeline)
+- **MCP integration**: Dynamic registry for MCP clients (Notion, and more to come)
+- **Vector DB**: Qdrant for document embeddings
+- **DB**: Postgres (via Docker) for conversation logs
 - **Infra**: Docker + docker-compose
 
 ### High-level architecture
 
 - `FastAPI` app exposes:
-  - `POST /chat` – text chat with the assistant.
-- **LLM provider abstraction**:
+  - `POST /chat` – text chat with the assistant (uses LangChain agent).
+- **LLM provider**:
   - Default: local **Ollama** (e.g., Llama 3) via HTTP.
-  - Drop-in replacements for OpenAI/Anthropic later.
-- **RAG pipeline**:
+  - Easy to switch to OpenAI/Anthropic via LangChain.
+- **RAG pipeline** (LangChain-based):
   - Offline ingestion script indexes files from a local `notes/` folder.
-  - Embeds documents and stores them in **Qdrant** (Docker container) or Chroma.
+  - Embeds documents and stores them in **Qdrant** (Docker container).
   - At query time, retrieves top-k chunks and feeds them into the LLM as context.
-- **Tools / agents**:
-  - Todo tools: `create_todo`, `list_todos` (backed by Postgres).
-  - Calendar tools: `create_google_calendar_event`, `list_google_calendar_events`.
-  - These are wired into an assistant pipeline so that LLM can call them when needed.
+- **MCP clients** (dynamic registry):
+  - **Notion MCP**: Creates todos in Notion databases via `mcp/notion` Docker container.
+  - Registry pattern makes it easy to add more MCP clients (Slack, GitHub, etc.).
+- **Tools / agents** (LangChain):
+  - Todo tools: Creates todos in Notion via MCP (falls back to local DB if not configured).
+  - Calendar tools: `create_google_calendar_event` via Google Calendar API.
+  - LangChain agent orchestrates intent classification, tool selection, and RAG.
 - **Persistence**:
-  - Postgres stores todos and conversation logs.
+  - Postgres stores conversation logs.
+  - Notion stores todos (via MCP).
 
 ### Project layout (backend-focused)
 
@@ -54,9 +60,15 @@ backend/
       pipeline.py          # RAG query pipeline used by assistant
     tools/
       __init__.py
-      todos.py             # Todo tools (create/list)
+      todos.py             # Todo tools (create/list) - fallback to local DB
       calendar.py          # Google Calendar tools
-    assistant.py           # Orchestration: RAG + tools + LLM (single entrypoint)
+    mcp_clients/           # MCP (Model Context Protocol) clients registry
+      __init__.py          # MCPClientRegistry for dynamic client management
+      notion.py             # Notion MCP client
+    langchain_agent.py     # LangChain-based agent: RAG + tools + MCP clients
+    langchain_rag.py       # LangChain RAG pipeline
+    langchain_tools.py     # LangChain tool wrappers
+    assistant.py           # DEPRECATED: Old orchestration (kept for reference)
 docker-compose.yml
 ```
 
@@ -178,7 +190,7 @@ You can follow this checklist as you build and run the project.
 
    - You should see a link and a matching event in your Google Calendar.
 
-7. **Set up Notion MCP (optional, for `/chat-langchain` endpoint)**
+7. **Set up Notion MCP (recommended for todos)**
    - Create a Notion integration:
      - Go to [Notion Integrations](https://www.notion.so/my-integrations) and create a new internal integration.
      - Copy the integration token (starts with `ntn_`).
@@ -204,17 +216,18 @@ You can follow this checklist as you build and run the project.
      - Open your database in Notion
      - Click "Share" → "Invite" → Select your integration
      - Without this, you'll get 401 errors even with a valid token
-   - The `/chat-langchain` endpoint will automatically use Notion MCP tools when configured.
+   - The `/chat` endpoint will automatically use Notion MCP tools when configured.
    - The Notion MCP server runs via Docker (`mcp/notion` image) using `langchain-mcp-adapters`.
+   - If Notion is not configured, todos will fall back to the local Postgres database.
 
-8. **Test the LangChain endpoint with Notion**
+8. **Test the chat endpoint with Notion**
    - After setting up Notion, test:
      ```bash
-     curl -X POST http://localhost:8000/chat-langchain \
+     curl -X POST http://localhost:8000/chat \
        -H "Content-Type: application/json" \
        -d '{"message": "Remind me to learn about MCP tomorrow", "api_token": "dev-token-123"}'
      ```
-   - This should create a todo in your Notion database (if `NOTION_TOKEN` is set) or fall back to local DB.
+   - This should create a todo in your Notion database (if `NOTION_INTEGRATION_TOKEN` is set) or fall back to local DB.
 
 More detailed backend and frontend implementation will live under `backend/` (and optionally `frontend/`) as you build out the project.
 

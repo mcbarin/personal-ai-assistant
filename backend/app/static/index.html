@@ -130,7 +130,7 @@
         <div class="header-title">Personal Assistant</div>
         <div class="header-subtitle">Ask questions, create todos, and schedule events.</div>
       </div>
-      <div class="badge">Local LLM + RAG + Calendar</div>
+      <div class="badge">LangChain + MCP + RAG</div>
     </div>
     <div id="messages" class="messages">
       <div class="message assistant">
@@ -164,7 +164,7 @@
       div.className = "message " + role;
 
       // Render URLs as clickable links.
-      // Special-case calendar links so only the label is visible.
+      // Special-case calendar and Notion links so only the label is visible.
       const parts = text.split(/(https?:\/\/\S+)/g);
       parts.forEach((part, index) => {
         if (!part) return;
@@ -176,10 +176,17 @@
           const prev = parts[index - 1] || "";
           const prevTrimmed = prev.trimEnd();
           if (
+            prevTrimmed.endsWith("Go to Calendar:") ||
+            prevTrimmed.endsWith("Go to Calendar") ||
             prevTrimmed.endsWith("Go to calendar event:") ||
             prevTrimmed.endsWith("Go to calendar event")
           ) {
-            a.textContent = "Go to calendar event";
+            a.textContent = "Go to Calendar";
+          } else if (
+            prevTrimmed.endsWith("Go to Notion:") ||
+            prevTrimmed.endsWith("Go to Notion")
+          ) {
+            a.textContent = "Go to Notion";
           } else {
             a.textContent = part;
           }
@@ -189,21 +196,28 @@
           div.appendChild(a);
         } else {
           const next = parts[index + 1] || "";
-          const label = "Go to calendar event:";
+          const calendarLabels = ["Go to Calendar:", "Go to calendar event:"];
+          const notionLabels = ["Go to Notion:"];
 
-          // If this text part ends with the label and the next part is a URL,
+          // If this text part ends with a label and the next part is a URL,
           // omit the label text (the link will render it instead) but keep any
           // text before it.
-          if (
-            part.trimEnd().endsWith(label) &&
-            /^https?:\/\//.test(next)
-          ) {
-            const cutoff = part.lastIndexOf(label);
-            const beforeLabel = part.slice(0, cutoff);
-            if (beforeLabel) {
-              div.appendChild(document.createTextNode(beforeLabel));
+          let labelFound = false;
+          for (const label of [...calendarLabels, ...notionLabels]) {
+            if (
+              part.trimEnd().endsWith(label) &&
+              /^https?:\/\//.test(next)
+            ) {
+              const cutoff = part.lastIndexOf(label);
+              const beforeLabel = part.slice(0, cutoff);
+              if (beforeLabel) {
+                div.appendChild(document.createTextNode(beforeLabel));
+              }
+              labelFound = true;
+              break;
             }
-          } else {
+          }
+          if (!labelFound) {
             div.appendChild(document.createTextNode(part));
           }
         }

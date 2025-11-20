@@ -6,7 +6,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from .config import Settings, get_settings
-from .assistant import handle_message
 from .db import get_db
 from .schemas import ChatRequest, ChatResponse, TodoRead
 from .tools.todos import list_todos
@@ -35,19 +34,7 @@ async def chat(
     payload: ChatRequest,
     settings: Settings = Depends(get_settings),
 ) -> ChatResponse:
-    if settings.api_token and payload.api_token != settings.api_token:
-        raise HTTPException(status_code=401, detail="Invalid API token")
-
-    reply = await handle_message(payload.message)
-    return reply
-
-
-@app.post("/chat-langchain", response_model=ChatResponse)
-async def chat_langchain(
-    payload: ChatRequest,
-    settings: Settings = Depends(get_settings),
-) -> ChatResponse:
-    """Chat endpoint that uses LangChain for RAG + tool calling."""
+    """Chat endpoint using LangChain for RAG + tool calling with MCP clients."""
     if settings.api_token and payload.api_token != settings.api_token:
         raise HTTPException(status_code=401, detail="Invalid API token")
 
@@ -64,7 +51,8 @@ def get_todos(
     return list_todos(db, status=status)
 
 
-# Serve the simple frontend under /ui to avoid conflicting with API endpoints
+# Serve the simple frontend at root URL
+# API routes (/chat, /health, /todos) are checked before static files, so they take precedence
 static_dir = Path(__file__).parent / "static"
 if static_dir.exists():
-    app.mount("/ui", StaticFiles(directory=str(static_dir), html=True), name="static")
+    app.mount("/", StaticFiles(directory=str(static_dir), html=True), name="static")

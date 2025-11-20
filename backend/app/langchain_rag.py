@@ -63,5 +63,3 @@ def answer_with_context_langchain(question: str) -> Tuple[str, List[str]]:
     response = llm.invoke(messages)
     reply = response.content if hasattr(response, "content") else str(response)
     return reply, retrieved_ids
-
-

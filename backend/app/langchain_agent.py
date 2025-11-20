@@ -9,7 +9,7 @@ from langchain_community.chat_models import ChatOllama
 from .config import get_settings
 from .langchain_rag import answer_with_context_langchain
 from .langchain_tools import create_event_tool, create_todo_tool
-from .notion_mcp_client import get_notion_mcp_tools
+from .mcp_clients import registry as mcp_registry
 
 
 settings = get_settings()
@@ -44,12 +44,30 @@ async def classify_intent(message: str) -> str:
 async def extract_todo(message: str) -> Tuple[str, str | None]:
     """Use the LLM to extract todo text and optional due datetime."""
     system_prompt = (
-        "You extract todo information from natural language.\n"
+        "You extract todo information from natural language and create a clear, concise todo title.\n"
         "Given one user message, output ONLY a JSON object with keys:\n"
         '{ "text": string, "due": string | null }.\n'
-        "- 'due' should be an ISO 8601 datetime (e.g. 2025-11-15T09:00:00) or null.\n"
-        "Interpret relative dates like 'today', 'tomorrow', or weekdays "
-        "relative to the current date.\n"
+        "- 'text' should be a natural, concise todo title that includes ALL relevant details.\n"
+        "  CRITICAL: Include times, dates, locations, and contextual information in the title.\n"
+        "  Examples:\n"
+        "  - Input: 'add todo to buy a bus ticket to airport (stansted at 23:20)'\n"
+        "    Output text: 'Buy bus ticket to Stansted for 23:20 flight'\n"
+        "  - Input: 'add todo \"buy bus ticket to stansted for tomorrow 23:20\"'\n"
+        "    Output text: 'Buy bus ticket to Stansted for tomorrow 23:20'\n"
+        "  - Input: 'remind me to call John tomorrow'\n"
+        "    Output text: 'Call John'\n"
+        "  - Input: 'todo: finish the report by Friday'\n"
+        "    Output text: 'Finish the report'\n"
+        "  Remove command phrases like 'add todo', 'remind me to', 'todo:', etc.\n"
+        "  Keep ALL contextual information: flight times, locations, dates mentioned in context.\n"
+        "- 'due' should ONLY be set if the user explicitly mentions a DEADLINE or DUE DATE.\n"
+        "  Examples of due dates/deadlines: 'due tomorrow', 'by Friday', 'deadline next week', 'due on 2025-11-15'.\n"
+        "  IMPORTANT: Times and dates that are CONTEXTUAL (like flight times, meeting times) should be in 'text', NOT in 'due'.\n"
+        "  Example: 'buy ticket for flight at 23:20' → text includes '23:20', due is null (not a deadline).\n"
+        "  Example: 'finish report by Friday' → text is 'Finish report', due is Friday (this IS a deadline).\n"
+        "- If 'due' is set, it should be an ISO 8601 datetime (e.g. 2025-11-15T09:00:00).\n"
+        "  Interpret relative dates like 'today', 'tomorrow', or weekdays relative to the current date.\n"
+        "- If no explicit due date/deadline is mentioned, set 'due' to null.\n"
         "Do not include any explanation text, only the JSON."
     )
     llm = ChatOllama(
@@ -148,8 +166,8 @@ async def run_agent(message: str) -> Tuple[str, List[str], List[str]]:
         print(f"DEBUG: notion_integration_token is set: {bool(settings.notion_integration_token)}", file=sys.stderr, flush=True)
         if settings.notion_integration_token:
             print(f"DEBUG: Token value starts with: {settings.notion_integration_token[:10] if settings.notion_integration_token else 'None'}...", file=sys.stderr, flush=True)
-            # Notion is configured, try to use it
-            notion_tools = await get_notion_mcp_tools()
+            # Notion is configured, try to use it via MCP registry
+            notion_tools = await mcp_registry.get_tools("notion")
 
             if notion_tools:
                 # Log available tools for debugging
@@ -203,65 +221,188 @@ async def run_agent(message: str) -> Tuple[str, List[str], List[str]]:
 
                 if create_tool:
                     text, due_iso = await extract_todo(message)
-                    try:
-                        # Notion API format for creating a page in a database:
-                        # parent: { database_id: "..." }
-                        # properties: { "Name": { title: [{ text: { content: "..." } }] } }
-                        # Note: Property name might be "Name", "Title", or whatever the database title property is
+                    # Debug logging
+                    import sys
+                    print(f"DEBUG: Extracted todo text: '{text}'", file=sys.stderr, flush=True)
+                    print(f"DEBUG: Extracted due_iso: '{due_iso}'", file=sys.stderr, flush=True)
+                    
+                    # Notion API format for creating a page in a database:
+                    # parent: { database_id: "..." }
+                    # properties: { "Name": { title: [{ text: { content: "..." } }] } }
+                    # Note: Property name might be "Name", "Title", or whatever the database title property is
 
-                        if not settings.notion_database_id:
-                            raise ValueError("NOTION_DATABASE_ID must be set in .env to create pages")
+                    if not settings.notion_database_id:
+                        raise ValueError("NOTION_DATABASE_ID must be set in .env to create pages")
 
-                        # Use correct Notion API format
-                        # Set status to "To Do" by default
-                        # Note: Property names may vary - common names: "Status", "Task Status", "Todo Status"
-                        # If this doesn't work, check your database schema and update the property name
-                        tool_args = {
-                            "parent": {
-                                "database_id": settings.notion_database_id
+                    # Ensure text is not empty
+                    if not text or not text.strip():
+                        text = message.strip()  # Fallback to original message if extraction failed
+                        print(f"DEBUG: Text was empty, using original message: '{text}'", file=sys.stderr, flush=True)
+
+                    # Use correct Notion API format
+                    # Set status to "To Do" by default
+                    # Note: Property names may vary - common names: "Status", "Task Status", "Todo Status"
+                    # If this doesn't work, check your database schema and update the property name
+                    tool_args = {
+                        "parent": {
+                            "database_id": settings.notion_database_id
+                        },
+                        "properties": {
+                            "Name": {  # Most common property name for title
+                                "title": [{"text": {"content": text.strip()}}]
                             },
-                            "properties": {
-                                "Name": {  # Most common property name for title
-                                    "title": [{"text": {"content": text}}]
-                                },
-                                "Status": {  # Set status to "To Do" - adjust property name if needed
-                                    "select": {
-                                        "name": "To Do"
-                                    }
+                            "Status": {  # Set status to "To Do" - adjust property name if needed
+                                "select": {
+                                    "name": "To Do"
                                 }
                             }
                         }
+                    }
 
-                        # Try alternative property names if "Status" doesn't work
-                        # Uncomment and adjust if needed:
-                        # tool_args["properties"]["Task Status"] = {"select": {"name": "To Do"}}
-                        # tool_args["properties"]["Todo Status"] = {"select": {"name": "To Do"}}
+                    # Try alternative property names if "Status" doesn't work
+                    # Uncomment and adjust if needed:
+                    # tool_args["properties"]["Task Status"] = {"select": {"name": "To Do"}}
+                    # tool_args["properties"]["Todo Status"] = {"select": {"name": "To Do"}}
 
-                        # If due date is provided, add it to properties
-                        # Note: This assumes your database has a "Due Date" property
-                        if due_iso:
+                    # Only add Due Date property if a valid due date was extracted
+                    # Note: This assumes your database has a "Due Date" property
+                    # If your database doesn't have this property, remove this block or adjust the property name
+                    if due_iso and due_iso.strip():
+                        try:
+                            # Validate it's a proper ISO date/datetime
                             # Parse ISO datetime to date if needed
                             due_date = due_iso.split("T")[0] if "T" in due_iso else due_iso
-                            tool_args["properties"]["Due Date"] = {
-                                "date": {"start": due_date}
-                            }
+                            # Only add if it's a valid date format (basic check)
+                            if len(due_date) >= 10 and due_date[4] == "-" and due_date[7] == "-":
+                                tool_args["properties"]["Due Date"] = {
+                                    "date": {"start": due_date}
+                                }
+                        except Exception:
+                            # If date parsing fails, just skip adding the Due Date property
+                            pass
 
-                        import sys
-                        print(f"DEBUG: Calling Notion MCP tool '{create_tool.name}' with parent.database_id: {settings.notion_database_id[:10]}...", file=sys.stderr, flush=True)
+                    import sys
+                    print(f"DEBUG: Calling Notion MCP tool '{create_tool.name}' with parent.database_id: {settings.notion_database_id[:10]}...", file=sys.stderr, flush=True)
+                    print(f"DEBUG: Tool args: {json.dumps(tool_args, indent=2)}", file=sys.stderr, flush=True)
+                    try:
                         result = await create_tool.ainvoke(tool_args)
                         used_tools.append("create_notion_todo")
-                        reply = f"Created Notion todo: {result}"
+                        
+                        # Debug: log the result type and content
+                        print(f"DEBUG: Result type: {type(result)}", file=sys.stderr, flush=True)
+                        print(f"DEBUG: Result (first 500 chars): {str(result)[:500]}", file=sys.stderr, flush=True)
+                        
+                        # Extract URL from result - handle various formats
+                        url = None
+                        result_dict = None
+                        
+                        if isinstance(result, str):
+                            # Try to parse as JSON string
+                            try:
+                                result_dict = json.loads(result)
+                            except json.JSONDecodeError:
+                                # Maybe it's a string representation, try to find JSON in it
+                                start_idx = result.find("{")
+                                end_idx = result.rfind("}")
+                                if start_idx != -1 and end_idx != -1:
+                                    try:
+                                        result_dict = json.loads(result[start_idx:end_idx+1])
+                                    except json.JSONDecodeError:
+                                        pass
+                        
+                        if result_dict is None and isinstance(result, dict):
+                            result_dict = result
+                        
+                        if result_dict:
+                            # Check if this is an error response
+                            if result_dict.get("object") == "error":
+                                error_msg = result_dict.get("message", "Unknown error")
+                                error_code = result_dict.get("code", "")
+                                print(f"DEBUG: Notion API returned error: {error_code} - {error_msg}", file=sys.stderr, flush=True)
+                                # This will be caught by the outer exception handler
+                                raise Exception(f"Notion API error: {error_msg}")
+                            
+                            url = result_dict.get("url")
+                            # Also check if url is nested
+                            if not url and "object" in result_dict:
+                                url = result_dict.get("url")
+                        
+                        print(f"DEBUG: Extracted URL: {url}", file=sys.stderr, flush=True)
+                        
+                        if url:
+                            reply = f"Created todo: {text.strip()}\nGo to Notion: {url}"
+                        else:
+                            # If no URL but result exists, still report success but note the issue
+                            print(f"DEBUG: WARNING - No URL found in result but call succeeded", file=sys.stderr, flush=True)
+                            reply = f"Created todo: {text.strip()}"
                     except Exception as e:
-                        # Log the error for debugging
-                        import sys
-                        import traceback
-                        print(f"DEBUG: Notion MCP tool call failed: {e}", file=sys.stderr, flush=True)
-                        print(f"DEBUG: Traceback: {traceback.format_exc()}", file=sys.stderr, flush=True)
-                        # Fallback to DB if MCP call fails
-                        text, due_iso = await extract_todo(message)
-                        result = create_todo_tool(text=text, due_iso=due_iso)
-                        used_tools.append("create_todo")
-                        reply = f"Notion MCP failed ({e}), created in local DB: {result}"
+                        error_str = str(e)
+                        # If error is about a property not existing (e.g., "Due Date"), retry without that property
+                        if "is not a property that exists" in error_str or ("validation_error" in error_str.lower() and "property" in error_str.lower()):
+                            import sys
+                            print(f"DEBUG: Property error detected, retrying without Due Date property", file=sys.stderr, flush=True)
+                            # Remove Due Date property and retry
+                            tool_args_no_due = {
+                                "parent": tool_args["parent"],
+                                "properties": {
+                                    "Name": tool_args["properties"]["Name"],
+                                    "Status": tool_args["properties"]["Status"]
+                                }
+                            }
+                            try:
+                                result = await create_tool.ainvoke(tool_args_no_due)
+                                used_tools.append("create_notion_todo")
+                                
+                                # Extract URL from result - same logic as above
+                                url = None
+                                result_dict = None
+                                
+                                if isinstance(result, str):
+                                    try:
+                                        result_dict = json.loads(result)
+                                    except json.JSONDecodeError:
+                                        start_idx = result.find("{")
+                                        end_idx = result.rfind("}")
+                                        if start_idx != -1 and end_idx != -1:
+                                            try:
+                                                result_dict = json.loads(result[start_idx:end_idx+1])
+                                            except json.JSONDecodeError:
+                                                pass
+                                
+                                if result_dict is None and isinstance(result, dict):
+                                    result_dict = result
+                                
+                                if result_dict:
+                                    # Check if this is an error response
+                                    if result_dict.get("object") == "error":
+                                        error_msg = result_dict.get("message", "Unknown error")
+                                        raise Exception(f"Notion API error: {error_msg}")
+                                    
+                                    url = result_dict.get("url")
+                                
+                                if url:
+                                    reply = f"Created todo: {text.strip()}\nGo to Notion: {url}"
+                                else:
+                                    reply = f"Created todo: {text.strip()}"
+                            except Exception as e2:
+                                # If retry also fails, fall back to DB
+                                import sys
+                                import traceback
+                                print(f"DEBUG: Notion MCP retry also failed: {e2}", file=sys.stderr, flush=True)
+                                text, due_iso = await extract_todo(message)
+                                result = create_todo_tool(text=text, due_iso=due_iso)
+                                used_tools.append("create_todo")
+                                reply = f"Notion MCP failed ({e2}), created in local DB: {result}"
+                        else:
+                            # Other errors - fall back to DB
+                            import sys
+                            import traceback
+                            print(f"DEBUG: Notion MCP tool call failed: {e}", file=sys.stderr, flush=True)
+                            print(f"DEBUG: Traceback: {traceback.format_exc()}", file=sys.stderr, flush=True)
+                            text, due_iso = await extract_todo(message)
+                            result = create_todo_tool(text=text, due_iso=due_iso)
+                            used_tools.append("create_todo")
+                            reply = f"Notion MCP failed ({e}), created in local DB: {result}"
                 else:
                     # Notion MCP available but no create tool found
                     import sys

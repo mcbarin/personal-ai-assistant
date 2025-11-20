@@ -1,3 +1,11 @@
+"""
+DEPRECATED: This module is no longer used.
+
+The application now uses LangChain-based agent in langchain_agent.py
+with MCP client integration via mcp_clients/ registry.
+
+This file is kept for reference but should not be imported or used.
+"""
 from datetime import datetime, timedelta
 import json
 from typing import List, Optional, Tuple
@@ -285,5 +293,3 @@ async def handle_message(message: str) -> ChatResponse:
         used_tools=used_tools,
         retrieved_doc_ids=retrieved_ids,
     )
-
-

@@ -94,5 +94,3 @@ async def answer_with_context(question: str) -> Tuple[str, List[str]]:
     llm = OllamaProvider()
     reply = await llm.generate(messages)
     return reply, retrieved_ids
-
-

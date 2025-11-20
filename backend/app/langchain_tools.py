@@ -28,6 +28,37 @@ def create_todo_tool(text: str, due_iso: Optional[str] = None) -> str:
         db.close()
 
 
+def _format_human_datetime_range(start: datetime, end: datetime) -> str:
+    """Return a human-friendly description like 'tomorrow, 11pm–12am'."""
+    from datetime import timedelta
+    now = datetime.now()
+    start_date = start.date()
+    today = now.date()
+    tomorrow = today + timedelta(days=1)
+
+    if start_date == today:
+        date_label = "today"
+    elif start_date == tomorrow:
+        date_label = "tomorrow"
+    else:
+        # Format as 'Nov 15' - use day without leading zero
+        day = start.day
+        date_label = start.strftime(f"%b {day}")  # e.g. 'Nov 15'
+
+    def fmt_time(dt: datetime) -> str:
+        # e.g. '11:00pm' or '3pm'
+        hour = dt.strftime("%I").lstrip("0") or "12"  # Handle hour 0 (midnight)
+        minute = dt.strftime("%M")
+        ampm = dt.strftime("%p").lower()
+        if minute == "00":
+            return f"{hour}{ampm}"
+        return f"{hour}:{minute}{ampm}"
+
+    start_str = fmt_time(start)
+    end_str = fmt_time(end)
+    return f"{date_label}, {start_str}–{end_str}"
+
+
 def create_event_tool(
     title: str,
     start_iso: str,
@@ -44,7 +75,8 @@ def create_event_tool(
         end=end,
         description=description,
     )
-    link = event.get("htmlLink", "(no link)")
-    return f"Created event '{title}' from {start_iso} to {end_iso}. Link: {link}"
-
-
+    link = event.get("htmlLink")
+    if link:
+        human_time = _format_human_datetime_range(start, end)
+        return f"Created event '{title}' for {human_time}.\nGo to Calendar: {link}"
+    return f"Created event '{title}'"
